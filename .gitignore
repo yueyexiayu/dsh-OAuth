@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+*.log
+.idea/
+.vscode/
+.env
+.credentials.yaml
+keys
+state.json
