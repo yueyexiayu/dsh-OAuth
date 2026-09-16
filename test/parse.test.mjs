@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   accountIdFromJwt,
+  displayNameFromIdentity,
   displayNameFromJwt,
   grantFromRecord,
   looksLikeOpaqueId,
@@ -19,6 +20,24 @@ test("platform aliases", () => {
   assert.equal(platformOf("grok").id, "xai");
   assert.equal(platformOf("gpt").id, "openai-codex");
   assert.equal(platformOf("nope"), null);
+});
+
+test("displayNameFromIdentity finds nested emails", () => {
+  assert.equal(displayNameFromIdentity({ user: { email: "user@example.com" } }), "user@example.com");
+  assert.equal(displayNameFromIdentity({ data: { profile: { mail: "user@example.com" } } }), "user@example.com");
+  assert.equal(displayNameFromIdentity({ name: "Example" }), "Example");
+  assert.equal(displayNameFromIdentity({ userId: "11111111-2222-4333-8444-555555555555" }), null);
+});
+
+test("publicAccount falls back to a jwt email for xai-style tokens", () => {
+  const grant = {
+    access: jwtWith({ email: "grok@example.com" }),
+    refresh: "secret-refresh-token-value",
+    expires: Date.now() + 60_000,
+  };
+  const pub = publicAccount(grant);
+  assert.equal(pub.account, "grok@example.com");
+  assert.equal(JSON.stringify(pub).includes("secret-refresh"), false);
 });
 
 test("opaque ids are not treated as accounts", () => {
