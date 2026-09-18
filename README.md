@@ -1,5 +1,7 @@
 # OAuth
 
+当前项目是深度适配个人使用，项目只是给大家提供思路和借鉴，尽量不要直接照搬。
+
 DeepSeek Harness 官方桌面端的账号登录条。在输入框下方显示 **Grok** / **GPT** 登录状态，可用官方 OAuth（xAI 设备码、ChatGPT Codex 设备码）登录、换号、退出。
 
 token 只写在 Host 的 `$DSH_HOME/.credentials.yaml`（`llm-pi-ai/xai`、`llm-pi-ai/openai-codex`），不会进渲染进程或对话。不要读取或改写 `~/.grok/auth.json` / `~/.codex/auth.json`。
