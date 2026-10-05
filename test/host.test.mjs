@@ -9,6 +9,7 @@ function jwtWith(payload) {
 function fakeCtx({ provider, records }) {
   let route;
   const ctx = {
+    effect() {},
     connection: {
       fetch: {
         register(options) {
