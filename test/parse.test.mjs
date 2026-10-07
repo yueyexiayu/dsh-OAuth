@@ -81,7 +81,27 @@ test("safeDetail redacts tokens and jwt", () => {
   const out = safeDetail({ access_token: "abc", nested: { refresh: "xyz" }, token: jwt });
   assert.equal(out.access_token, "<redacted>");
   assert.equal(out.nested.refresh, "<redacted>");
-  assert.equal(out.token, "<redacted-jwt>");
+  assert.equal(out.token, "<redacted>");
+  assert.equal(safeDetail(jwt), "<redacted-jwt>");
+});
+
+test("safeDetail redacts credentials embedded in error strings", () => {
+  const token = "opaque-test-token-without-a-known-prefix";
+  const jwt = "aaa." + "b".repeat(80) + ".ccc";
+  const cases = [
+    'upstream said {"access_token":"' + token + '"}',
+    "refresh_token=" + token + " unavailable",
+    "Authorization: Bearer " + token,
+    "JWT rejected: " + jwt,
+    "opaque failure " + token,
+  ];
+  for (const message of cases) {
+    const detail = safeDetail({ nested: [message] }, [token]);
+    assert.equal(JSON.stringify(detail).includes(token), false);
+    assert.equal(JSON.stringify(detail).includes(jwt), false);
+  }
+  assert.equal(safeDetail("profile is read-only"), "profile is read-only");
+  assert.equal(safeDetail('access_token="synthetic opaque token"').includes("synthetic"), false);
 });
 
 test("grantFromRecord requires oauth grant", () => {
