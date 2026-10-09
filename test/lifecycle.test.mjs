@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { apply } from "../lib/index.js";
 import { OPENAI_DEVICE_USERCODE_URL, XAI_DEVICE_URL, XAI_TOKEN_URL } from "../lib/parse.js";
 
-function host({ beforeWrite, authorization = { cancel() {} } } = {}) {
+function host({ beforeWrite, authorization = { cancel() {} }, sessions } = {}) {
   let route;
   let dispose;
   const writes = [];
@@ -17,6 +17,13 @@ function host({ beforeWrite, authorization = { cancel() {} } } = {}) {
     },
     get(name) {
       if (name === "authorization") return authorization;
+      if (name === "agents" && sessions) {
+        return { get(id) {
+          const provider = sessions[id];
+          if (!provider) return undefined;
+          return { session: { requestHeader: () => ({ config: { provider } }) } };
+        } };
+      }
       if (name === "settings") return { describe: () => [{ ns: "llm-pi-ai", revision: 0, value: { providers: {} } }], async mutate() {} };
       if (name === "agentDefaultModel") return { currentSelection: () => ({ provider: "xai" }) };
     },
@@ -24,11 +31,18 @@ function host({ beforeWrite, authorization = { cancel() {} } } = {}) {
   return {
     writes,
     dispose: () => dispose(),
-    async call(action, platform = "grok") {
-      const response = await route.fetch(new Request("http://local/api/OAuth", { method: "POST", body: JSON.stringify({ action, platform }) }));
+    async call(action, platform = "grok", sessionId = "") {
+      const payload = { action, sessionId };
+      if (platform != null) payload.platform = platform;
+      const response = await route.fetch(new Request(`http://local/api/OAuth?sessionId=${encodeURIComponent(sessionId)}`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }));
       return { status: response.status, body: await response.json() };
     },
-    async status() { return (await route.fetch(new Request("http://local/api/OAuth"))).json(); },
+    async status(sessionId = "") {
+      return (await route.fetch(new Request(`http://local/api/OAuth?sessionId=${encodeURIComponent(sessionId)}`))).json();
+    },
   };
 }
 
@@ -85,25 +99,75 @@ test("failed device-code request remains visible in status", async (t) => {
   h.dispose();
 });
 
-test("switching platform cannot write an old poll result into the new login", async (t) => {
+test("starting gpt login does not cancel an in-flight grok login or write into the gpt record", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let resolvePoll;
-  t.mock.method(globalThis, "fetch", async (url) => {
-    if (url === XAI_DEVICE_URL) return Response.json(started);
+  let grokSignal;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url === XAI_DEVICE_URL) return Response.json({ ...started, user_code: "GROK-CODE" });
     if (url === OPENAI_DEVICE_USERCODE_URL) return Response.json({ device_auth_id: "fake-gpt-device", user_code: "GPT-TEST", interval: 5 });
     assert.equal(url, XAI_TOKEN_URL);
+    grokSignal = options.signal;
     return await new Promise((resolve) => { resolvePoll = resolve; });
   });
-  const h = host();
-  await h.call("start");
-  t.mock.timers.tick(1000);
-  await flush();
-  await h.call("start", "gpt");
-  resolvePoll(Response.json(done));
-  await flush();
-  assert.deepEqual(h.writes, []);
-  assert.equal((await h.status()).pending.platform, "gpt");
-  h.dispose();
+  const h = host({ sessions: { "session-a": "xai", "session-b": "openai-codex", "session-c": "deepseek-official" } });
+  try {
+    await h.call("start", "grok", "session-a");
+    t.mock.timers.tick(1000);
+    await flush();
+    assert.equal(grokSignal.aborted, false);
+    await h.call("start", "gpt", "session-b");
+    assert.equal(grokSignal.aborted, false);
+    assert.equal((await h.status("session-a")).pending.userCode, "GROK-CODE");
+    assert.equal((await h.status("session-b")).pending.userCode, "GPT-TEST");
+    resolvePoll(Response.json(done));
+    await flush();
+    assert.deepEqual(h.writes.map((item) => item.key), ["llm-pi-ai/xai"]);
+    assert.equal((await h.status("session-b")).pending.userCode, "GPT-TEST");
+    assert.equal((await h.status("session-a")).pending, null);
+  } finally { h.dispose(); }
+});
+
+test("another session cannot see a device code or inherit its platform", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(url, XAI_DEVICE_URL);
+    return Response.json({ ...started, user_code: "SESSION-A-CODE", verification_uri: "https://example.invalid/session-a" });
+  });
+  const h = host({ sessions: { "session-a": "xai", "session-b": "xai", "session-c": "deepseek-official" } });
+  try {
+    const startedBody = await h.call("start", "grok", "session-a");
+    assert.equal(startedBody.body.pending.userCode, "SESSION-A-CODE");
+    const owner = await h.status("session-a");
+    assert.equal(owner.platform, "grok");
+    assert.equal(owner.pending.userCode, "SESSION-A-CODE");
+    assert.equal(owner.pending.verificationUri, "https://example.invalid/session-a");
+    const peer = await h.status("session-b");
+    assert.equal(peer.platform, "grok");
+    assert.equal(peer.pending, null);
+    assert.equal(JSON.stringify(peer).includes("SESSION-A-CODE"), false);
+    assert.equal(JSON.stringify(peer).includes("example.invalid"), false);
+    const other = await h.status("session-c");
+    assert.equal(other.isSupported, false);
+    assert.equal(other.platform, null);
+    assert.equal(other.pending, null);
+    assert.equal(JSON.stringify(other).includes("SESSION-A-CODE"), false);
+  } finally { h.dispose(); }
+});
+
+test("cancel without a platform only cancels logins started by that session", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    if (url === XAI_DEVICE_URL) return Response.json({ ...started, user_code: "GROK-CODE" });
+    if (url === OPENAI_DEVICE_USERCODE_URL) return Response.json({ device_auth_id: "fake-gpt-device", user_code: "GPT-TEST", interval: 5 });
+    throw new Error("unexpected " + url);
+  });
+  const h = host({ sessions: { "session-a": "xai", "session-b": "openai-codex" } });
+  try {
+    await h.call("start", "grok", "session-a");
+    await h.call("start", "gpt", "session-b");
+    const response = await h.call("cancel", null, "session-a");
+    assert.equal(response.body.pending, null);
+    assert.equal((await h.status("session-b")).pending.userCode, "GPT-TEST");
+  } finally { h.dispose(); }
 });
 
 test("logout and switching accounts cancel the official authorization for the same key", async (t) => {

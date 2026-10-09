@@ -273,67 +273,96 @@ test("logout waits only for its official key, then deletes after the accepted qu
   assert.equal(h.unsubscriptions, 1);
 });
 
-for (const action of ["logout", "start"]) {
-  test(`${action} aborts the local poll before waiting for official settlement`, async (t) => {
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-    let resolvePoll;
-    let pollSignal;
-    let codexStarts = 0;
-    let inFlight = false;
-    fixtureFetch(t, (url, options) => {
-      if (url === XAI_DEVICE_URL) return Response.json(deviceResponse);
-      if (url === OPENAI_DEVICE_USERCODE_URL) {
-        codexStarts++;
-        return Response.json({ device_auth_id: "SYNTHETIC-codex-device", user_code: "TEST-GPT", interval: 5 });
-      }
-      assert.equal(url, XAI_TOKEN_URL);
-      pollSignal = options.signal;
-      return new Promise((resolve) => { resolvePoll = resolve; });
-    });
-    const targetKey = action === "start" ? CODEX_KEY : XAI_KEY;
-    const authorization = {
-      describe() { return { inFlight }; },
-      cancel(key) { if (inFlight) assert.equal(key, targetKey); },
-    };
-    const h = createHost(t, { authorization });
-    assert.equal((await h.call("start")).status, 200);
-    t.mock.timers.tick(1000);
-    await flush();
-    assert.ok(resolvePoll);
-    assert.equal(pollSignal.aborted, false);
-    inFlight = true;
-    const operation = h.call(action, action === "start" ? "gpt" : "grok");
-    await flush();
-    assert.equal(pollSignal.aborted, true);
-    assert.equal(h.listenerCount, 1);
-    assert.deepEqual(h.credentials.queued, []);
-    assert.equal(codexStarts, 0);
-    const waiting = await h.status();
-    if (action === "logout") assert.equal(waiting.pending, null);
-    else {
-      assert.equal(waiting.pending.platform, "gpt");
-      assert.equal(waiting.pending.userCode, "");
-    }
-    resolvePoll(Response.json(tokenResponse));
-    await flush();
-    assert.deepEqual(h.credentials.committed, []);
-    inFlight = false;
-    h.emit(targetKey);
-    const result = await operation;
-    assert.equal(result.status, 200);
-    assert.equal(h.listenerCount, 0);
-    assert.equal(h.unsubscriptions, 1);
-    if (action === "logout") {
-      assert.equal(result.body.pending, null);
-      assert.deepEqual(h.credentials.committed, [["delete", XAI_KEY]]);
-    } else {
-      assert.equal(codexStarts, 1);
-      assert.equal(result.body.pending.platform, "gpt");
-      assert.equal(result.body.pending.userCode, "TEST-GPT");
-      assert.deepEqual(h.credentials.committed, []);
-    }
+test("logout aborts the local poll before waiting for official settlement", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let resolvePoll;
+  let pollSignal;
+  let inFlight = false;
+  fixtureFetch(t, (url, options) => {
+    if (url === XAI_DEVICE_URL) return Response.json(deviceResponse);
+    assert.equal(url, XAI_TOKEN_URL);
+    pollSignal = options.signal;
+    return new Promise((resolve) => { resolvePoll = resolve; });
   });
-}
+  const authorization = {
+    describe() { return { inFlight }; },
+    cancel(key) { if (inFlight) assert.equal(key, XAI_KEY); },
+  };
+  const h = createHost(t, { authorization });
+  assert.equal((await h.call("start")).status, 200);
+  t.mock.timers.tick(1000);
+  await flush();
+  assert.ok(resolvePoll);
+  assert.equal(pollSignal.aborted, false);
+  inFlight = true;
+  const operation = h.call("logout", "grok");
+  await flush();
+  assert.equal(pollSignal.aborted, true);
+  assert.equal(h.listenerCount, 1);
+  assert.deepEqual(h.credentials.queued, []);
+  assert.equal((await h.status()).pending, null);
+  resolvePoll(Response.json(tokenResponse));
+  await flush();
+  assert.deepEqual(h.credentials.committed, []);
+  inFlight = false;
+  h.emit(XAI_KEY);
+  const result = await operation;
+  assert.equal(result.status, 200);
+  assert.equal(h.listenerCount, 0);
+  assert.equal(h.unsubscriptions, 1);
+  assert.equal(result.body.pending, null);
+  assert.deepEqual(h.credentials.committed, [["delete", XAI_KEY]]);
+});
+
+test("starting gpt waits for its own official settlement without aborting grok", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let resolvePoll;
+  let pollSignal;
+  let codexStarts = 0;
+  let inFlight = false;
+  fixtureFetch(t, (url, options) => {
+    if (url === XAI_DEVICE_URL) return Response.json(deviceResponse);
+    if (url === OPENAI_DEVICE_USERCODE_URL) {
+      codexStarts++;
+      return Response.json({ device_auth_id: "SYNTHETIC-codex-device", user_code: "TEST-GPT", interval: 5 });
+    }
+    assert.equal(url, XAI_TOKEN_URL);
+    pollSignal = options.signal;
+    return new Promise((resolve) => { resolvePoll = resolve; });
+  });
+  const authorization = {
+    describe() { return { inFlight }; },
+    cancel(key) { if (inFlight) assert.equal(key, CODEX_KEY); },
+  };
+  const h = createHost(t, { authorization });
+  assert.equal((await h.call("start")).status, 200);
+  t.mock.timers.tick(1000);
+  await flush();
+  assert.ok(resolvePoll);
+  inFlight = true;
+  const operation = h.call("start", "gpt");
+  await flush();
+  assert.equal(pollSignal.aborted, false);
+  assert.equal(h.listenerCount, 1);
+  assert.equal(codexStarts, 0);
+  const waiting = await h.status();
+  assert.equal(waiting.platform, "grok");
+  assert.equal(waiting.pending.userCode, "TEST");
+  assert.equal(JSON.stringify(waiting).includes("TEST-GPT"), false);
+  inFlight = false;
+  h.emit(CODEX_KEY);
+  const result = await operation;
+  assert.equal(result.status, 200);
+  assert.equal(codexStarts, 1);
+  assert.equal(pollSignal.aborted, false);
+  assert.equal(result.body.platform, "grok");
+  assert.equal(result.body.pending.userCode, "TEST");
+  assert.equal(h.listenerCount, 0);
+  assert.equal(h.unsubscriptions, 1);
+  assert.deepEqual(h.credentials.committed, []);
+  resolvePoll(Response.json({ error: "authorization_pending" }, { status: 400 }));
+  await flush();
+});
 
 test("dispose rejects an official settlement wait and removes its listener without deleting", async (t) => {
   fixtureFetch(t);

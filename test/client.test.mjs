@@ -50,6 +50,7 @@ function harness(sessionId = "session-a") {
   const context = {
     document: { getElementById: () => ({}), head: {} },
     window: { __ModuleLoader__: { load({ factory }) { registration = factory(() => React); } } },
+    AbortSignal,
     setInterval(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearInterval(id) { timers.delete(id); },
     fetch(url, init) {
@@ -260,9 +261,10 @@ test("non-JSON HTTP failures preserve both HTTP status and parsing failure", asy
 });
 
 test("failed cancellation keeps the authorization and error visible across polls", async () => {
-  const pending = { verificationUri: "https://example.invalid/fixture", label: "GPT", userCode: "TEST-CODE" };
+  const pending = { platform: "gpt", verificationUri: "https://example.invalid/fixture", label: "GPT", userCode: "TEST-CODE" };
   const h = await loaded({ pending });
   h.click("取消");
+  assert.deepEqual(JSON.parse(h.requests.at(-1).init.body), { action: "cancel", platform: "gpt", sessionId: "session-a" });
   h.requests.at(-1).resolve(response({ ok: false, error: "cancel-fixture-failed" }, 502));
   await settle();
   h.tick();
@@ -282,6 +284,16 @@ test("API key Grok model retains OAuth refresh control and authentication notice
   assert.match(h.text(), /模型使用 API key/);
   h.click("刷新");
   assert.deepEqual(JSON.parse(h.requests.at(-1).init.body), { action: "refresh", platform: "grok", sessionId: "session-a" });
+});
+
+test("a timed-out request stays visible instead of looking successful", async () => {
+  const h = harness();
+  const error = new Error("The operation was aborted due to timeout");
+  error.name = "TimeoutError";
+  h.requests[0].reject(error);
+  await settle();
+  assert.match(h.text(), /OAuth 请求超时/);
+  assert.equal(h.requests[0].init.signal.aborted, false);
 });
 
 test("unsupported models remain hidden when no operation or query has failed", async () => {
