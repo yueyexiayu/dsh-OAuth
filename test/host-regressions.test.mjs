@@ -391,3 +391,19 @@ test("official cancellation errors remove the preinstalled listener and do not d
   assert.equal(h.unsubscriptions, 1);
   assert.deepEqual(h.credentials.queued, []);
 });
+
+test("logout delete failure redacts the grant read before deletion", async (t) => {
+  fixtureFetch(t);
+  const original = initialGrant();
+  const credentials = {
+    async readRecord() { return original; },
+    async deleteRecord() { throw new Error(`delete failed ${OLD_ACCESS} ${OLD_REFRESH}`); },
+    async modifyRecord() { throw new Error("not used"); },
+  };
+  const h = createHost(t, { credentials });
+  const result = await h.call("logout");
+  assert.equal(result.status, 502);
+  assert.match(result.body.error, /delete failed/);
+  assert.match(result.body.error, /<redacted>/);
+  assertNoSecrets(result.body);
+});
