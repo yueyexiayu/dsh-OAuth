@@ -8,7 +8,7 @@ import { OPENAI_TOKEN_URL, OPENAI_MODELS_URL, XAI_REFRESH_SKEW_MS } from "../lib
 
 const NOW = 1_800_000_000_000;
 const jwt = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } })).toString("base64url")}.test`;
-const xaiDevice = { device_code: "test-device", user_code: "TEST", verification_uri: "https://example.invalid/verify", interval: 5, expires_in: 900 };
+const xaiDevice = { device_code: "test-device", user_code: "TEST", verification_uri: "https://auth.x.ai/verify", interval: 5, expires_in: 900 };
 const openaiDevice = { device_auth_id: "test-device", user_code: "TEST", interval: "5" };
 const xaiToken = { access_token: "test-access", refresh_token: "test-refresh", expires_in: 3600 };
 const openaiToken = { access_token: jwt, refresh_token: "test-refresh", expires_in: 3600 };
@@ -53,10 +53,33 @@ for (const uri of ["http://example.invalid", "javascript:alert(1)", "https://use
   });
 }
 test("xAI uses safe complete URI and finite default polling interval", async (t) => {
-  reply(t, { ...xaiDevice, interval: Infinity, verification_uri_complete: "https://example.invalid/complete" });
+  reply(t, { ...xaiDevice, interval: Infinity, verification_uri_complete: "https://auth.x.ai/complete" });
   const started = await xaiStart();
   assert.equal(started.interval, 5);
-  assert.equal(started.verificationUri, "https://example.invalid/complete");
+  assert.equal(started.verificationUri, "https://auth.x.ai/complete");
+});
+
+for (const uri of [
+  "https://example.invalid/verify",
+  "https://auth.x.ai.evil.example/verify",
+  "https://evil.auth.x.ai/verify",
+  "https://auth.x.ai:8443/verify",
+]) {
+  test(`xAI rejects untrusted verification host ${uri}`, async (t) => {
+    reply(t, { ...xaiDevice, verification_uri: uri });
+    await assert.rejects(xaiStart(), /主机不受信任/);
+    reply(t, { ...xaiDevice, verification_uri_complete: uri });
+    await assert.rejects(xaiStart(), /主机不受信任/);
+  });
+}
+
+test("xAI verification URI drops device_code before it can reach the client", async (t) => {
+  reply(t, { ...xaiDevice, verification_uri_complete: "https://auth.x.ai/oauth2/device?user_code=TEST&device_code=secret-device#device_code=secret-device" });
+  const started = await xaiStart();
+  assert.equal(started.verificationUri.includes("device_code"), false);
+  assert.equal(started.verificationUri.includes("secret-device"), false);
+  assert.match(started.verificationUri, /^https:\/\/auth\.x\.ai\//);
+  assert.match(started.verificationUri, /user_code=TEST/);
 });
 
 for (const [start, base, fields] of [[xaiStart, xaiDevice, ["device_code", "user_code"]], [openaiStart, openaiDevice, ["device_auth_id", "user_code"]]]) {

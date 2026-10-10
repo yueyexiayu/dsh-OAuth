@@ -46,7 +46,7 @@ function host({ beforeWrite, authorization = { cancel() {} }, sessions } = {}) {
   };
 }
 
-const started = { device_code: "fake-device", user_code: "TEST", verification_uri: "https://example.invalid", interval: 1, expires_in: 900 };
+const started = { device_code: "fake-device", user_code: "TEST", verification_uri: "https://auth.x.ai/device", interval: 1, expires_in: 900 };
 const done = { access_token: "fake-access", refresh_token: "fake-refresh", expires_in: 3600 };
 const flush = () => new Promise(setImmediate);
 
@@ -131,7 +131,7 @@ test("starting gpt login does not cancel an in-flight grok login or write into t
 test("another session cannot see a device code or inherit its platform", async (t) => {
   t.mock.method(globalThis, "fetch", async (url) => {
     assert.equal(url, XAI_DEVICE_URL);
-    return Response.json({ ...started, user_code: "SESSION-A-CODE", verification_uri: "https://example.invalid/session-a" });
+    return Response.json({ ...started, user_code: "SESSION-A-CODE", verification_uri: "https://auth.x.ai/session-a" });
   });
   const h = host({ sessions: { "session-a": "xai", "session-b": "xai", "session-c": "deepseek-official" } });
   try {
@@ -140,7 +140,7 @@ test("another session cannot see a device code or inherit its platform", async (
     const owner = await h.status("session-a");
     assert.equal(owner.platform, "grok");
     assert.equal(owner.pending.userCode, "SESSION-A-CODE");
-    assert.equal(owner.pending.verificationUri, "https://example.invalid/session-a");
+    assert.equal(owner.pending.verificationUri, "https://auth.x.ai/session-a");
     const peer = await h.status("session-b");
     assert.equal(peer.platform, "grok");
     assert.equal(peer.pending, null);

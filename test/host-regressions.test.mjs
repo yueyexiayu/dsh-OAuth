@@ -6,6 +6,7 @@ import {
   OPENAI_DEVICE_USERCODE_URL,
   XAI_DEVICE_URL,
   XAI_MODELS_URL,
+  XAI_REVOKE_URL,
   XAI_TOKEN_URL,
   XAI_USERINFO_URL,
 } from "../lib/parse.js";
@@ -26,7 +27,7 @@ const tokenResponse = { access_token: NEW_ACCESS, refresh_token: NEW_REFRESH, ex
 const deviceResponse = {
   device_code: "SYNTHETIC-device-code",
   user_code: "TEST",
-  verification_uri: "https://example.invalid/device",
+  verification_uri: "https://auth.x.ai/device",
   interval: 1,
   expires_in: 900,
 };
@@ -205,6 +206,7 @@ for (const [label, profile, expected] of [
     fixtureFetch(t, (url) => {
       if (url === XAI_TOKEN_URL) return Response.json(tokenResponse);
       if (url === XAI_MODELS_URL) return Response.json({ data: [] });
+      if (url === XAI_REVOKE_URL) return new Response(null, { status: 200 });
       assert.ok(url === GROK_USER_URL || url === XAI_USERINFO_URL, "unexpected fixture request");
       return Response.json({ email: "synthetic@example.invalid" });
     });
@@ -422,7 +424,10 @@ test("official cancellation errors remove the preinstalled listener and do not d
 });
 
 test("logout delete failure redacts the grant read before deletion", async (t) => {
-  fixtureFetch(t);
+  fixtureFetch(t, (url) => {
+    assert.equal(url, XAI_REVOKE_URL);
+    return new Response(null, { status: 200 });
+  });
   const original = initialGrant();
   const credentials = {
     async readRecord() { return original; },
@@ -435,4 +440,28 @@ test("logout delete failure redacts the grant read before deletion", async (t) =
   assert.match(result.body.error, /delete failed/);
   assert.match(result.body.error, /<redacted>/);
   assertNoSecrets(result.body);
+});
+
+test("logout revokes the refresh token, still deletes when revocation fails, and does not edit routes", async (t) => {
+  const bodies = [];
+  fixtureFetch(t, async (url, options) => {
+    assert.equal(url, XAI_REVOKE_URL);
+    bodies.push(String(options.body));
+    return Response.json({ error: "server_error", error_description: OLD_REFRESH }, { status: 500 });
+  });
+  const settings = {
+    describe() { return []; },
+    async mutate() { assert.fail("logout must not edit model routes"); },
+  };
+  const credentials = credentialStore({ initial: initialGrant() });
+  const h = createHost(t, { credentials, settings });
+  const result = await h.call("logout");
+  assert.equal(result.status, 502);
+  assert.match(result.body.error, /本地凭据已删除/);
+  assert.equal(result.body.error.includes(OLD_REFRESH), false);
+  assert.equal(result.body.error.includes(OLD_ACCESS), false);
+  assert.equal(credentials.records.has(XAI_KEY), false);
+  assert.match(bodies[0], /token_type_hint=refresh_token/);
+  assert.match(bodies[0], /client_id=/);
+  assert.equal(bodies[0].includes("grant_type"), false);
 });
