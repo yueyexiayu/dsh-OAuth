@@ -59,6 +59,45 @@ test("xAI uses safe complete URI and finite default polling interval", async (t)
   assert.equal(started.verificationUri, "https://auth.x.ai/complete");
 });
 
+// The official xAI device endpoint returns accounts.x.ai authorization URLs.
+// Keep the legacy auth.x.ai fixtures above and test each response field independently.
+for (const field of ["verification_uri", "verification_uri_complete"]) {
+  for (const [label, uri, expected] of [
+    ["HTTPS", "https://accounts.x.ai/oauth2/device", "https://accounts.x.ai/oauth2/device"],
+    ["explicit 443", "https://accounts.x.ai:443/oauth2/device", "https://accounts.x.ai/oauth2/device"],
+    ["sanitized query", "https://accounts.x.ai/oauth2/device?user_code=TEST&device_code=synthetic-secret&referrer=pi#device_code=synthetic-secret", "https://accounts.x.ai/oauth2/device?user_code=TEST&referrer=pi"],
+  ]) {
+    test(`xAI accepts accounts.x.ai ${field} with ${label}`, async (t) => {
+      reply(t, { ...xaiDevice, [field]: uri });
+      assert.equal((await xaiStart()).verificationUri, expected);
+    });
+  }
+}
+test("xAI accepts official accounts.x.ai URLs in both device response fields", async (t) => {
+  reply(t, {
+    ...xaiDevice,
+    verification_uri: "https://accounts.x.ai/oauth2/device",
+    verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=TEST",
+  });
+  assert.equal((await xaiStart()).verificationUri, "https://accounts.x.ai/oauth2/device?user_code=TEST");
+});
+
+for (const field of ["verification_uri", "verification_uri_complete"]) {
+  for (const [uri, error] of [
+    ["https://accounts.x.ai.evil.example/oauth2/device", /主机不受信任/],
+    ["https://evil.accounts.x.ai/oauth2/device", /主机不受信任/],
+    ["https://accounts.x.ai:8443/oauth2/device", /主机不受信任/],
+    ["http://accounts.x.ai/oauth2/device", /必须使用 HTTPS/],
+    ["https://user@accounts.x.ai/oauth2/device", /不能包含用户信息/],
+    ["https://user:pass@accounts.x.ai/oauth2/device", /不能包含用户信息/],
+  ]) {
+    test(`xAI rejects unsafe accounts.x.ai ${field} ${uri}`, async (t) => {
+      reply(t, { ...xaiDevice, [field]: uri });
+      await assert.rejects(xaiStart(), error);
+    });
+  }
+}
+
 for (const uri of [
   "https://example.invalid/verify",
   "https://auth.x.ai.evil.example/verify",
