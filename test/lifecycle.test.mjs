@@ -1,255 +1,100 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { apply } from "../lib/index.js";
-import { OPENAI_DEVICE_USERCODE_URL, XAI_DEVICE_URL, XAI_TOKEN_URL } from "../lib/parse.js";
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { apply } from '../lib/index.js';
 
-function host({ beforeWrite, authorization = { cancel() {} }, sessions } = {}) {
-  let route;
-  let dispose;
-  const writes = [];
-  apply({
-    effect(callback) { dispose = callback(); },
-    connection: { fetch: { register(value) { route = value; } } },
-    credentials: {
-      async readRecord() { return undefined; },
-      async modifyRecord(key, mutate) { await beforeWrite?.(); const record = await mutate(undefined); writes.push({ key, record }); return record; },
-      async deleteRecord() {},
-    },
-    get(name) {
-      if (name === "authorization") return authorization;
-      if (name === "agents" && sessions) {
-        return { get(id) {
-          const provider = sessions[id];
-          if (!provider) return undefined;
-          return { session: { requestHeader: () => ({ config: { provider } }) } };
-        } };
-      }
-      if (name === "settings") return { describe: () => [{ ns: "llm-pi-ai", revision: 0, value: { providers: {} } }], async mutate() {} };
-      if (name === "agentDefaultModel") return { currentSelection: () => ({ provider: "xai" }) };
-    },
-  });
-  return {
-    writes,
-    dispose: () => dispose(),
-    async call(action, platform = "grok", sessionId = "") {
-      const payload = { action, sessionId };
-      if (platform != null) payload.platform = platform;
-      const response = await route.fetch(new Request(`http://local/api/OAuth?sessionId=${encodeURIComponent(sessionId)}`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }));
-      return { status: response.status, body: await response.json() };
-    },
-    async status(sessionId = "") {
-      return (await route.fetch(new Request(`http://local/api/OAuth?sessionId=${encodeURIComponent(sessionId)}`))).json();
+function host(t, run) {
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('fixture blocks unexpected network'); });
+  let route, dispose, modelListener;
+  const attempts = []; const listeners = new Set();
+  const authorization = {
+    describe: () => ({ methods: [{ id: 'oauth' }], inFlight: attempts.some(a => !a.done) }),
+    cancel() { for (const a of attempts) if (!a.done) a.signalDispatch(); },
+    async begin(request) {
+      let cancel;
+      const aborted = new Promise(resolve => { cancel = () => resolve({ status: 'cancelled' }); });
+      request.signal.addEventListener('abort', cancel, { once: true });
+      const attempt = { request, done: false, signalDispatch: cancel }; attempts.push(attempt);
+      try { return await Promise.race([run(request, attempts.length), aborted]); }
+      finally { attempt.done = true; request.signal.removeEventListener('abort', cancel); for (const listener of listeners) listener(request.key); }
     },
   };
+  apply({
+    effect(fn) { dispose = fn(); }, on(event, fn) { if (event === 'session/event') { modelListener = fn; return () => { modelListener = undefined; }; } listeners.add(fn); return () => listeners.delete(fn); },
+    connection: { fetch: { register(r) { route = r; } } },
+    credentials: { async readRecord() {}, async deleteRecord() {}, async modifyRecord() { assert.fail('plugin must not commit login'); } },
+    get(name) {
+      if (name === 'authorization') return authorization;
+      if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'openai-codex', model: 'fixture-gpt' }) };
+      if (name === 'settings') return { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { 'openai-codex': {} } } }] };
+    },
+  });
+  t.after(() => dispose());
+  return { attempts, dispose, event(event) { modelListener?.({ id: '' }, event); }, switchProvider(provider) { modelListener?.({ id: '' }, { type: 'model/selection', data: { provider, model: 'changed' } }); }, async call(action) {
+    const response = await route.fetch(new Request('http://fixture.invalid/api/OAuth', action ? { method: 'POST', body: JSON.stringify({ action, platform: 'gpt' }) } : {}));
+    return { status: response.status, body: await response.json() };
+  } };
 }
-
-const started = { device_code: "fake-device", user_code: "TEST", verification_uri: "https://auth.x.ai/device", interval: 1, expires_in: 900 };
-const done = { access_token: "fake-access", refresh_token: "fake-refresh", expires_in: 3600 };
+const notice = { message: 'fixture', url: 'https://auth.openai.com/codex/device', code: 'TEST' };
 const flush = () => new Promise(setImmediate);
-
-for (const action of ["cancel", "logout", "dispose"]) {
-  test(`${action} aborts in-flight login and ignores its late result`, async (t) => {
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-    let resolvePoll;
-    let pollSignal;
-    t.mock.method(globalThis, "fetch", async (url, options) => {
-      if (url === XAI_DEVICE_URL) return Response.json(started);
-      assert.equal(url, XAI_TOKEN_URL);
-      pollSignal = options.signal;
-      return await new Promise((resolve) => { resolvePoll = resolve; });
-    });
-    const h = host();
-    assert.equal((await h.call("start")).status, 200);
-    t.mock.timers.tick(1000);
-    await flush();
-    assert.ok(resolvePoll);
-    if (action === "dispose") h.dispose();
-    else await h.call(action);
-    assert.equal(pollSignal.aborted, true);
-    resolvePoll(Response.json(done));
-    await flush();
-    assert.deepEqual(h.writes, []);
-    if (action !== "dispose") assert.equal((await h.status()).pending, null);
-    else assert.equal((await h.call("start")).status, 503);
-    h.dispose();
+test('switching session provider stops the previous official device flow', async t => {
+  const h = host(t, async r => { r.interaction.notify(notice); return await new Promise(() => {}); });
+  await h.call('start'); h.switchProvider('deepseek');
+  assert.equal(h.attempts[0].request.signal.aborted, true);
+  assert.equal((await h.call()).body.pending, null);
+});
+test('late last-used request header cannot cancel next-provider authorization', async t => {
+  const h = host(t, async r => { r.interaction.notify(notice); return await new Promise(() => {}); });
+  await h.call('start'); h.event({ type: 'request/header', data: { header: { config: { provider: 'xai' } } } });
+  assert.equal(h.attempts[0].request.signal.aborted, false);
+  assert.equal((await h.call()).body.pending.userCode, 'TEST');
+});
+for (const action of ['cancel', 'logout', 'dispose']) {
+  test(action + ' aborts official flow and ignores late notices', async t => {
+    let request;
+    const h = host(t, async r => { request = r; r.interaction.notify(notice); return await new Promise(() => {}); });
+    assert.equal((await h.call('start')).status, 200);
+    if (action === 'dispose') h.dispose(); else assert.equal((await h.call(action)).status, 200);
+    assert.equal(request.signal.aborted, true);
+    request.interaction.notify({ ...notice, code: 'LATE' });
+    if (action !== 'dispose') assert.equal((await h.call()).body.pending, null);
+    else assert.equal((await h.call('start')).status, 503);
   });
 }
-
-test("successful device login persists grant and clears pending", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.mock.method(globalThis, "fetch", async (url) => url === XAI_DEVICE_URL ? Response.json(started) : Response.json(done));
-  const h = host();
-  await h.call("start");
-  t.mock.timers.tick(1000);
-  await flush();
-  assert.equal(h.writes.length, 1);
-  assert.equal(h.writes[0].key, "llm-pi-ai/xai");
-  assert.equal((await h.status()).pending, null);
-  h.dispose();
+test('official completion clears pending without duplicate plugin write', async t => {
+  let resolve;
+  const h = host(t, r => { r.interaction.notify(notice); return new Promise(done => { resolve = done; }); });
+  await h.call('start'); resolve({ status: 'authorized' }); await flush();
+  assert.equal((await h.call()).body.pending, null);
 });
-
-test("failed device-code request remains visible in status", async (t) => {
-  t.mock.method(globalThis, "fetch", async () => new Response("failed", { status: 503 }));
-  const h = host();
-  assert.equal((await h.call("start")).status, 502);
-  assert.match((await h.status()).pending.error, /申请设备码失败/);
-  h.dispose();
+test('official flow failure before notice is visible and never returns success', async t => {
+  const h = host(t, async () => { throw new Error('synthetic opaque private value'); });
+  const result = await h.call('start'); assert.equal(result.status, 502);
+  assert.match(result.body.error, /官方 OAuth/); assert.doesNotMatch(result.body.error, /opaque private/);
+  assert.match((await h.call()).body.pending.error, /失败/);
 });
-
-test("starting gpt login does not cancel an in-flight grok login or write into the gpt record", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  let resolvePoll;
-  let grokSignal;
-  t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url === XAI_DEVICE_URL) return Response.json({ ...started, user_code: "GROK-CODE" });
-    if (url === OPENAI_DEVICE_USERCODE_URL) return Response.json({ device_auth_id: "fake-gpt-device", user_code: "GPT-TEST", interval: 5 });
-    assert.equal(url, XAI_TOKEN_URL);
-    grokSignal = options.signal;
-    return await new Promise((resolve) => { resolvePoll = resolve; });
-  });
-  const h = host({ sessions: { "session-a": "xai", "session-b": "openai-codex", "session-c": "deepseek-official" } });
-  try {
-    await h.call("start", "grok", "session-a");
-    t.mock.timers.tick(1000);
-    await flush();
-    assert.equal(grokSignal.aborted, false);
-    await h.call("start", "gpt", "session-b");
-    assert.equal(grokSignal.aborted, false);
-    assert.equal((await h.status("session-a")).pending.userCode, "GROK-CODE");
-    assert.equal((await h.status("session-b")).pending.userCode, "GPT-TEST");
-    resolvePoll(Response.json(done));
-    await flush();
-    assert.deepEqual(h.writes.map((item) => item.key), ["llm-pi-ai/xai"]);
-    assert.equal((await h.status("session-b")).pending.userCode, "GPT-TEST");
-    assert.equal((await h.status("session-a")).pending, null);
-  } finally { h.dispose(); }
+test('official flow failure after code keeps terminal error visible', async t => {
+  let reject;
+  const h = host(t, r => { r.interaction.notify(notice); return new Promise((_resolve, fail) => { reject = fail; }); });
+  await h.call('start'); reject(new Error('device expired')); await flush();
+  assert.match((await h.call()).body.pending.error, /失败/);
 });
-
-test("another session cannot see a device code or inherit its platform", async (t) => {
-  t.mock.method(globalThis, "fetch", async (url) => {
-    assert.equal(url, XAI_DEVICE_URL);
-    return Response.json({ ...started, user_code: "SESSION-A-CODE", verification_uri: "https://auth.x.ai/session-a" });
-  });
-  const h = host({ sessions: { "session-a": "xai", "session-b": "xai", "session-c": "deepseek-official" } });
-  try {
-    const startedBody = await h.call("start", "grok", "session-a");
-    assert.equal(startedBody.body.pending.userCode, "SESSION-A-CODE");
-    const owner = await h.status("session-a");
-    assert.equal(owner.platform, "grok");
-    assert.equal(owner.pending.userCode, "SESSION-A-CODE");
-    assert.equal(owner.pending.verificationUri, "https://auth.x.ai/session-a");
-    const peer = await h.status("session-b");
-    assert.equal(peer.platform, "grok");
-    assert.equal(peer.pending, null);
-    assert.equal(JSON.stringify(peer).includes("SESSION-A-CODE"), false);
-    assert.equal(JSON.stringify(peer).includes("example.invalid"), false);
-    const other = await h.status("session-c");
-    assert.equal(other.isSupported, false);
-    assert.equal(other.platform, null);
-    assert.equal(other.pending, null);
-    assert.equal(JSON.stringify(other).includes("SESSION-A-CODE"), false);
-  } finally { h.dispose(); }
+test('switching accounts aborts prior official flow before starting replacement', async t => {
+  const h = host(t, async r => { r.interaction.notify(notice); return await new Promise(() => {}); });
+  await h.call('start'); await h.call('start');
+  assert.equal(h.attempts.length, 2); assert.equal(h.attempts[0].request.signal.aborted, true);
+  assert.equal(h.attempts[1].request.signal.aborted, false);
 });
-
-test("cancel without a platform only cancels logins started by that session", async (t) => {
-  t.mock.method(globalThis, "fetch", async (url) => {
-    if (url === XAI_DEVICE_URL) return Response.json({ ...started, user_code: "GROK-CODE" });
-    if (url === OPENAI_DEVICE_USERCODE_URL) return Response.json({ device_auth_id: "fake-gpt-device", user_code: "GPT-TEST", interval: 5 });
-    throw new Error("unexpected " + url);
-  });
-  const h = host({ sessions: { "session-a": "xai", "session-b": "openai-codex" } });
-  try {
-    await h.call("start", "grok", "session-a");
-    await h.call("start", "gpt", "session-b");
-    const response = await h.call("cancel", null, "session-a");
-    assert.equal(response.body.pending, null);
-    assert.equal((await h.status("session-b")).pending.userCode, "GPT-TEST");
-  } finally { h.dispose(); }
-});
-
-test("logout and switching accounts cancel the official authorization for the same key", async (t) => {
-  t.mock.method(globalThis, "fetch", async () => Response.json(started));
-  const cancelled = [];
-  const h = host({ authorization: { cancel(key) { cancelled.push(key); } } });
-  try {
-    await h.call("logout", "gpt");
-    await h.call("start", "grok");
-    assert.deepEqual(cancelled, ["llm-pi-ai/openai-codex", "llm-pi-ai/xai"]);
-  } finally { h.dispose(); }
-});
-
-for (const stalled of [false, true]) {
-  test(`device deadline stops ${stalled ? "an in-flight" : "pending"} poll and preserves expiry error`, async (t) => {
-    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
-    let polls = 0;
-    let signal;
-    let release;
-    t.mock.method(globalThis, "fetch", async (url, options) => {
-      if (url === XAI_DEVICE_URL) return Response.json({ ...started, expires_in: 3 });
-      polls++;
-      signal = options.signal;
-      if (stalled) return await new Promise((resolve) => { release = resolve; });
-      return Response.json({ error: "authorization_pending" }, { status: 400 });
-    });
-    const h = host();
-    try {
-      await h.call("start");
-      t.mock.timers.tick(1000);
-      await flush();
-      t.mock.timers.tick(2000);
-      await flush();
-      assert.match((await h.status()).pending.error, /设备码已过期/);
-      if (stalled) {
-        assert.equal(signal.aborted, true);
-        release(Response.json(done));
-        await flush();
-      }
-      const stoppedAt = polls;
-      t.mock.timers.tick(20 * 60 * 1000);
-      await flush();
-      assert.equal(polls, stoppedAt);
-      assert.deepEqual(h.writes, []);
-    } finally { h.dispose(); }
+for (const url of ['http://auth.openai.com/device', 'https://auth.openai.com.evil.invalid/device', 'https://user@auth.openai.com/device', 'https://auth.openai.com:8443/device']) {
+  test('untrusted official notice is refused: ' + url, async t => {
+    const h = host(t, async r => { r.interaction.notify({ ...notice, url }); return { status: 'cancelled' }; });
+    const result = await h.call('start'); assert.equal(result.status, 502); assert.match(result.body.error, /不受信任/);
   });
 }
-
-test("cancel while waiting for credential lock prevents a late write", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  let unlock;
-  t.mock.method(globalThis, "fetch", async (url) => url === XAI_DEVICE_URL ? Response.json(started) : Response.json(done));
-  const h = host({ beforeWrite: () => new Promise((resolve) => { unlock = resolve; }) });
-  await h.call("start");
-  t.mock.timers.tick(1000);
-  await flush();
-  assert.ok(unlock);
-  await h.call("cancel");
-  unlock();
-  await flush();
-  assert.deepEqual(h.writes, []);
-  assert.equal((await h.status()).pending, null);
-  h.dispose();
+test('device_code secret is removed from public authorization URL', async t => {
+  const h = host(t, async r => { r.interaction.notify({ ...notice, url: notice.url + '?user_code=TEST&device_code=private#private' }); return await new Promise(() => {}); });
+  const result = await h.call('start'); assert.doesNotMatch(JSON.stringify(result.body), /private|device_code/);
 });
-
-test("device deadline while waiting for credential lock rejects an accepted token", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
-  let unlock;
-  t.mock.method(globalThis, "fetch", async (url) => url === XAI_DEVICE_URL
-    ? Response.json({ ...started, expires_in: 3 }) : Response.json(done));
-  const h = host({ beforeWrite: () => new Promise((resolve) => { unlock = resolve; }) });
-  try {
-    await h.call("start");
-    t.mock.timers.tick(1000);
-    await flush();
-    assert.equal(typeof unlock, "function");
-    t.mock.timers.tick(2000);
-    await flush();
-    assert.match((await h.status()).pending.error, /设备码已过期/);
-    unlock();
-    await flush();
-    assert.deepEqual(h.writes, []);
-    assert.match((await h.status()).pending.error, /设备码已过期/);
-  } finally { unlock?.(); h.dispose(); }
+test('unrecognized official prompt fails instead of silently choosing browser login', async t => {
+  const h = host(t, async r => { await r.interaction.prompt({ kind: 'text', message: 'enter code' }); });
+  const result = await h.call('start'); assert.equal(result.status, 502); assert.match(result.body.error, /失败/);
 });

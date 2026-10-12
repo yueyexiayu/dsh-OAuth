@@ -14,6 +14,8 @@ function harness(sessionId = "session-a") {
   const effects = [];
   const timers = new Map();
   const requests = [];
+  let projection;
+  const useProjection = (_key) => projection;
   let cursor = 0;
   let timerId = 0;
   let registration;
@@ -50,7 +52,7 @@ function harness(sessionId = "session-a") {
   const context = {
     document: { getElementById: () => ({}), head: {} },
     window: { __ModuleLoader__: { load({ factory }) { registration = factory(() => React); } } },
-    AbortSignal,
+    AbortSignal, AbortController,
     setInterval(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearInterval(id) { timers.delete(id); },
     fetch(url, init) {
@@ -64,7 +66,7 @@ function harness(sessionId = "session-a") {
   } });
   function render() {
     cursor = 0;
-    tree = component({ sessionId });
+    tree = component({ sessionId, useProjection: projection === undefined ? undefined : useProjection });
     return tree;
   }
   function nodes(node = render()) {
@@ -89,6 +91,7 @@ function harness(sessionId = "session-a") {
     },
     tick() { for (const callback of timers.values()) callback(); },
     switchSession(next, flush = true) { sessionId = next; render(); if (flush) flushEffects(); },
+    switchModel(provider, model = 'test-model', flush = true) { projection = { next: { provider, model }, lastUsed: null }; render(); if (flush) flushEffects(); },
     unmount() { unmounted = true; for (const hook of hooks) hook?.cleanup?.(); },
     get updatesAfterUnmount() { return updatesAfterUnmount; },
   };
@@ -299,4 +302,35 @@ test("a timed-out request stays visible instead of looking successful", async ()
 test("unsupported models remain hidden when no operation or query has failed", async () => {
   const h = await loaded({ isSupported: false, platform: null });
   assert.equal(h.render(), null);
+});
+
+for (const kind of ['query', 'action']) {
+  test(`same-session model change hides old account and ignores late ${kind}`, async () => {
+    const h = await loaded();
+    if (kind === 'action') h.click('退出'); else h.tick();
+    const stale = h.requests.at(-1);
+    h.switchModel('deepseek', 'other-model', false);
+    assert.doesNotMatch(h.text(), /current-account|GPT|退出/);
+    stale.resolve(response(snapshot({ account: { loggedIn: true, account: 'stale-model-account' } })));
+    await settle();
+    assert.doesNotMatch(h.text(), /stale-model-account/);
+  });
+}
+test('provider projection change requests new provider immediately and tags its actions', async () => {
+  const h = await loaded();
+  const count = h.requests.length;
+  h.switchModel('xai');
+  assert.equal(h.requests.length, count + 1);
+  assert.match(h.requests.at(-1).url, /provider=xai/);
+  h.requests.at(-1).resolve(response(snapshot({ platform: 'grok' })));
+  await settle();
+  h.click('退出');
+  assert.equal(JSON.parse(h.requests.at(-1).init.body).provider, 'xai');
+});
+test('selection query failures hide stale account controls', async () => {
+  const h = await loaded(); h.tick();
+  h.requests.at(-1).resolve(response({ ok: false, error: 'session selection failed' }, 502));
+  await settle();
+  assert.match(h.text(), /session selection failed/);
+  assert.doesNotMatch(h.text(), /current-account|退出/);
 });

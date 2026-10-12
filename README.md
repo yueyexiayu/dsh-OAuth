@@ -24,12 +24,15 @@ token 只写在 Host 的 `$DSH_HOME/.credentials.yaml`（`llm-pi-ai/xai`、`llm-
 - 登录或手动刷新会通过当前官方 `settings.describe/mutate` 接口补上缺失路由，继承官方安装包中的模型目录；已有模型列表和路由配置保持不变
 - 路由写入携带配置版本号，遇到并发修改会重新检查；写入失败会明确显示，凭据已经保存时也不会假装路由配置成功
 - 自动续期由官方模型适配器负责；本插件的手动刷新也在官方 `credentials.modifyRecord` 锁内完成，避免读取旧 refresh token 后覆盖新凭据
-- 设备码快捷登录仍由插件发起，凭据与官方模型适配器共用；本次保留当前界面和交互，没有切换成中央 authorization 的通用问答流程
-- 换号、退出会先撤销本插件的相应设备请求，并取消同一凭据 key 的官方授权；等待官方 `authorization/settled` 后再发起新设备登录或删除凭据，避免官方已接受但尚未入锁的登录结果复活账号。这一协调针对已核验的官方 pi-ai 流，不保证任意忽略取消信号的第三方授权流
-- 取消或卸载会中止本插件设备登录；设备码有独立截止计时，即使轮询请求或凭据锁等待未结束，过期结果也不会保存。OpenAI 未返回有效期时沿用官方 15 分钟上限
+- 登录正式调用官方 `authorization.begin({ key, method: "oauth", interaction, signal })`，由已注册的 `llm-pi-ai` flow 负责设备码、轮询、PKCE、期限及凭据提交；插件不再复制这些协议实现
+- 保留输入框下的设备码交互：显示官方 notice 的链接和 code，Codex 官方 select 提供 `device_code` 时明确选择设备登录，不默选 browser；不支持的 prompt、授权或持久化失败均明确显示
+- 换号、退出先取消相同凭据 key 的授权，并等待官方 `authorization/settled`，再启动下一次授权或删除凭据，避免已经接受的官方提交复活账号；取消、卸载及当前会话切换到其他提供方时中止本插件发起的官方 flow。不能保证任意忽略取消信号的第三方授权流
+- 当前会话模型通过官方只读 `sessionQuery.observeSession` 的 `modelSelection.next ?? lastUsed` 读取；活跃会话和未恢复的历史会话使用同一契约并释放 observation，不为查询启动或恢复 Agent。只有无 sessionId 的新入口或已确认存在但尚无模型选择的空会话使用默认模型
+- 显式无效的 sessionId 返回 400；不存在的会话返回 404，持久化、格式、模型投影或读取异常返回错误，不回落到无关全球账号。start / refresh / logout / cancel 都校验当前提供方；模型已切换或请求账号不匹配返回 409
+- Client 订阅槽位的 `useProjection("modelSelection")`，会话或模型切换立即清空旧账号，并使旧请求失效；Host 在异步账号查询结束后再次核对选择，迟到响应不能显示旧提供方
 - xAI 刷新响应必须含合法 access token；有效期未返回时采用官方默认值，存在时须为有限正数。省略 refresh token 时保留原值，字段存在但无效时拒绝且保留旧凭据。已完成轮换的合法凭据仍会保存，不因后续模型验证、路由配置失败或卸载而丢失
 - 配置了 `apiKeyEnv` 的模型路由会明确显示「模型使用 API key；退出 OAuth 不影响该认证」，不会通过登录或退出自动切换认证方式
-- 网络、HTTP、JSON、业务及持久化失败会明确显示；后台查询不会清除操作错误，旧请求和旧会话结果不会覆盖新状态。协议和 Host 错误会脱敏已知凭据，但不声称能识别任意未知 opaque token
+- 网络、HTTP、JSON、业务及持久化失败会明确显示；远端不支持该 token 类型的吊销返回失败提示，不再冒充成功。远端失败仍删除本地凭据，并明确区分两者。后台查询不会清除操作错误，旧请求和旧会话结果不会覆盖新状态。协议和 Host 错误会脱敏已知凭据，但不声称能识别任意未知 opaque token
 - 修改插件后需要完全退出桌面应用（⌘Q）再打开；无需重新构建桌面端
 - 仓库不含账号或凭据
 
@@ -40,7 +43,7 @@ for file in lib/*.js scripts/*.mjs test/*.mjs; do node --check "$file" || exit 1
 node --test
 ```
 
-可选：把 `DSH_OFFICIAL_NODE_MODULES` 指向已解包的官方运行时依赖目录，核验官方 authorization / pi-ai 与本插件的取消、已提交写入和退出竞态：
+已核对桌面运行时 `0.2.1-alpha.2` 的官方接口。可选：把 `DSH_OFFICIAL_NODE_MODULES` 指向已解包的官方运行时依赖目录，核验实际 `llm-pi-ai` flow 的 xAI / Codex 设备码 notice、取消，以及 authorization 已提交写入和退出竞态：
 
 ```bash
 DSH_OFFICIAL_NODE_MODULES=/absolute/path/to/official/node_modules node --test scripts/verify-official.mjs

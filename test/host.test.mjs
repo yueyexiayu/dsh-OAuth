@@ -29,6 +29,7 @@ function fakeCtx({ provider, records }) {
       },
     },
     get(name) {
+      if (name === "sessionQuery") return { async observeSession(id) { return { header: { id }, projections: { values: { modelSelection: { next: { provider }, lastUsed: null } } }, [Symbol.dispose]() {} }; } };
       if (name === "agentDefaultModel") {
         return { currentSelection: () => ({ provider }) };
       }
