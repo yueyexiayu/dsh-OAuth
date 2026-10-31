@@ -4,7 +4,7 @@
 <p><strong>Manage Grok and GPT beside the composer, without copying authentication protocols.</strong></p>
 <p>Official OAuth device login, account switching and logout for DeepSeek Harness desktop.</p>
 <p><a href="README.md">简体中文</a> · <strong>English</strong></p>
-<p><a href="package.json">v0.1.1</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
+<p><a href="package.json">v0.1.2</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
 <p><a href="#features">Features</a> · <a href="#how-it-works">How it works</a> · <a href="#quick-start">Quick start</a> · <a href="#accounts-and-configuration">Accounts and configuration</a> · <a href="#validation">Validation</a></p>
 </div>
 

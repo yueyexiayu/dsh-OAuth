@@ -4,7 +4,7 @@
 <p><strong>在输入框旁管理 Grok 与 GPT 登录，不复制认证协议。</strong></p>
 <p>DeepSeek Harness 桌面端的官方 OAuth 设备登录、换号与退出入口。</p>
 <p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
-<p><a href="package.json">v0.1.1</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
+<p><a href="package.json">v0.1.2</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
 <p><a href="#核心能力">核心能力</a> · <a href="#工作方式">工作方式</a> · <a href="#快速开始">快速开始</a> · <a href="#账号与配置">账号与配置</a> · <a href="#验证">验证</a></p>
 </div>
 
