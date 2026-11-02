@@ -1,6 +1,6 @@
 {
   "name": "OAuth",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "DSH desktop plugin: log in to Grok/xAI and ChatGPT Codex with official OAuth.",
   "type": "module",
