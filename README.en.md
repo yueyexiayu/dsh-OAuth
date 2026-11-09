@@ -4,7 +4,7 @@
 <p><strong>Manage Grok and Codex accounts on the plugin page and beside the composer, without copying authentication protocols.</strong></p>
 <p>Official OAuth device login, multi-account switching and removal for DeepSeek Harness desktop.</p>
 <p><a href="README.md">简体中文</a> · <strong>English</strong></p>
-<p><a href="package.json">v0.1.4</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
+<p><a href="package.json">v0.1.5</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
 <p><a href="#features">Features</a> · <a href="#how-it-works">How it works</a> · <a href="#quick-start">Quick start</a> · <a href="#accounts-and-configuration">Accounts and configuration</a> · <a href="#validation">Validation</a></p>
 </div>
 
@@ -16,7 +16,7 @@ A reference for a personal DSH desktop workflow. The plugin detail page manages 
 
 <table><tr>
 <td width="33%"><strong>🔑 Official device login</strong><br/><br/>Show saved accounts and login controls on the plugin page while the official flow owns the device notice, polling and PKCE.</td>
-<td width="33%"><strong>🔄 Multiple accounts</strong><br/><br/>Archive the current grant before adding another, write a selected account back to the official key, and attempt remote revocation on deletion.</td>
+<td width="33%"><strong>🔄 Accounts and model visibility</strong><br/><br/>Archive the current grant before adding another. A provider with no matching account disappears from the Session model catalog and model-switching controls.</td>
 <td width="33%"><strong>🧭 Session-aware status</strong><br/><br/>Follow official model projections, clear stale account state and inspect history without resuming an Agent.</td>
 </tr><tr>
 <td><strong>🧩 Missing-route setup</strong><br/><br/>Inherit the official model catalog, retain existing configuration and use versioned concurrent writes.</td>
@@ -58,6 +58,7 @@ Merge into `$DSH_HOME/profiles/desktop/cordis.patch.yml`, preserving other entri
 | Supported platforms | Codex (`openai-codex`) and Grok (`xai`) only |
 | Switching | Archive the active account, then write the selected grant to its official credential key |
 | Deletion | Remove the current or saved account and attempt remote revocation; report local deletion and remote failure separately |
+| Model visibility | With no account record, `llm.listModels` exposes no Codex/Grok models; saved accounts restore the original catalog. Routes using `apiKeyEnv` remain visible after OAuth deletion |
 | Session selection | Official read-only `sessionQuery.observeSession`, `modelSelection.next ?? lastUsed` |
 | Default model | Only an entry without sessionId or a confirmed existing empty session with no model selection |
 | API Key routes | Explicitly state that OAuth logout does not change that authentication method |
@@ -89,7 +90,7 @@ Optional official-component verification:
 DSH_OFFICIAL_NODE_MODULES=/absolute/path/to/official/node_modules node --test scripts/verify-official.mjs
 ```
 
-Automated checks use synthetic data and an in-memory credential queue. Plugin and client regression tests cover account listing, login archiving, switching, deletion, provider restrictions and error states without reading real accounts. The update was also loaded after a desktop restart under DSH 0.2.2-rc.1, and the plugin page showed v0.1.4, Codex/Grok account lists, login buttons and delete controls. No real account authorization or remote revocation was executed.
+Automated checks use synthetic data and an in-memory credential queue. Plugin and client regression tests cover account listing, login archiving, switching, deletion, model visibility, provider restrictions and error states without reading real accounts. The update was also loaded after a desktop restart under DSH 0.2.2-rc.1, and Codex/Grok model groups disappeared from the Session selector after their accounts were removed. No real account authorization or remote revocation was executed.
 
 ## License
 

@@ -155,3 +155,20 @@ test('a successful poll does not clear an action error', async () => {
   await settle();
   assert.match(page.text(), /delete-fixture-failed/);
 });
+
+test('deleting an OAuth account on an API-key route does not claim the model was hidden', async () => {
+  const page = pageHarness();
+  const keyed = structuredClone(payload);
+  keyed.accounts[0].authMode = 'api-key';
+  page.requests[0].resolve(response(keyed));
+  await settle();
+  page.button('删除 first@example.invalid').props.onClick();
+  page.button('确认删除').props.onClick();
+  const after = structuredClone(keyed);
+  after.accounts[0].accounts = [];
+  page.requests.at(-1).resolve(response(after));
+  await settle();
+  const text = page.text();
+  assert.match(text, /使用 API key，仍会保留/);
+  assert.doesNotMatch(text, /对应模型已从会话选择器隐藏/);
+});

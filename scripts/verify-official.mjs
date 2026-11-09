@@ -11,7 +11,7 @@ if (!base || !isAbsolute(base)) {
   throw new Error("DSH_OFFICIAL_NODE_MODULES must name an absolute, unpacked official node_modules directory");
 }
 const require = createRequire(join(base, "@deepseek-ai/dsh-authorization/lib/index.js"));
-const { Context } = await import(pathToFileURL(require.resolve("@deepseek-ai/cordis")));
+const { Context, Service } = await import(pathToFileURL(require.resolve("@deepseek-ai/cordis")));
 const { CredentialProvider } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-credentials")));
 const { AuthorizationService } = await import(pathToFileURL(join(base, "@deepseek-ai/dsh-authorization/lib/index.js")));
 const { createModels } = await import(pathToFileURL(join(base, "@earendil-works/pi-ai/dist/models.js")));
@@ -107,6 +107,32 @@ function installOfficialFlows(ctx) {
     llm: { registerConfigurableProviders() { return { replace() {} }; }, registerModelDiscovery() {} },
   }, { providers: { get: () => ({}) } });
 }
+class MemoryLlm extends Service {
+  constructor(ctx) { super(ctx, "llm"); }
+  listConfigurableProviders() { return []; }
+  async listModels(provider) { return [{ provider, id: "synthetic-model", name: "synthetic-model" }]; }
+}
+test("credential model gate is removed cleanly through a real Cordis service", async t => {
+  const ctx = new Context();
+  await ctx.plugin(MemoryLlm);
+  const disposers = [];
+  apply({
+    get(name) {
+      if (name === "llm") return ctx.llm;
+      if (name === "settings") return { describe: () => [{ ns: "llm-pi-ai", value: { providers: { "openai-codex": {} } } }] };
+    },
+    credentials: { async readRecord() { return undefined; } },
+    connection: { fetch: { register() {} } },
+    on() { return () => {}; },
+    effect(callback) { const dispose = callback(); if (typeof dispose === "function") disposers.push(dispose); },
+  });
+  t.after(() => ctx.registry.delete(MemoryLlm));
+  assert.deepEqual(await ctx.llm.listModels("openai-codex"), []);
+  assert.equal(Object.getOwnPropertyDescriptor(ctx.llm, "listModels") !== undefined, true);
+  for (const dispose of disposers.reverse()) dispose();
+  assert.equal(Object.getOwnPropertyDescriptor(ctx.llm, "listModels"), undefined);
+  assert.equal((await ctx.llm.listModels("openai-codex")).length, 1);
+});
 for (const provider of ['xai', 'openai-codex']) {
   test('actual official pi-ai flow supplies device code through plugin begin: ' + provider, async t => {
     const endpoints = [];

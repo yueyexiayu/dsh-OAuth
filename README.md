@@ -4,7 +4,7 @@
 <p><strong>在插件页面和输入框旁管理 Grok 与 Codex 登录，不复制认证协议。</strong></p>
 <p>DeepSeek Harness 桌面端的官方 OAuth 设备登录、多账号切换与删除入口。</p>
 <p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
-<p><a href="package.json">v0.1.4</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
+<p><a href="package.json">v0.1.5</a> · <a href="LICENSE">MIT</a> · DSH desktop plugin</p>
 <p><a href="#核心能力">核心能力</a> · <a href="#工作方式">工作方式</a> · <a href="#快速开始">快速开始</a> · <a href="#账号与配置">账号与配置</a> · <a href="#验证">验证</a></p>
 </div>
 
@@ -16,7 +16,7 @@
 
 <table><tr>
 <td width="33%"><strong>🔑 官方设备登录</strong><br/><br/>插件页展示账号与登录按钮；设备码由官方 flow 处理，不自行重写轮询或 PKCE。</td>
-<td width="33%"><strong>🔄 多账号管理</strong><br/><br/>添加账号时先归档当前凭据，切换账号时写回官方凭据键；删除会尝试远端吊销。</td>
+<td width="33%"><strong>🔄 多账号与模型联动</strong><br/><br/>添加账号时先归档当前凭据；没有对应账号的平台不会进入会话模型目录或模型切换入口。</td>
 <td width="33%"><strong>🧭 会话感知状态</strong><br/><br/>跟随官方模型投影，切换会话/模型清除旧账号，不为读历史恢复 Agent。</td>
 </tr><tr>
 <td><strong>🧩 补齐缺失路由</strong><br/><br/>沿用官方模型目录，保留已有列表和配置，用版本号处理并发修改。</td>
@@ -58,6 +58,7 @@ git clone https://github.com/yueyexiayu/dsh-OAuth.git "$DSH_HOME/plugins/OAuth"
 | 支持平台 | 仅 Codex（`openai-codex`）与 Grok（`xai`） |
 | 切换 | 先归档当前账号，再把选中账号写回对应官方凭据键 |
 | 删除 | 删除当前或已保存账号，并尝试远端吊销；本地删除与远端失败分别报告 |
+| 模型可见性 | 账号记录不存在时，`llm.listModels` 对 Codex/Grok 返回空列表；有账号时恢复原模型目录。使用 `apiKeyEnv` 的路由不受 OAuth 删除影响 |
 | 会话选择 | 官方只读 `sessionQuery.observeSession`，`modelSelection.next ?? lastUsed` |
 | 默认模型 | 仅无sessionId新入口，或已确认存在但无模型选择的空会话采用 |
 | API Key 路由 | 明示退出 OAuth 不改变该认证，不擅自切换方式 |
@@ -89,7 +90,7 @@ node --test
 DSH_OFFICIAL_NODE_MODULES=/absolute/path/to/official/node_modules node --test scripts/verify-official.mjs
 ```
 
-自动测试使用合成数据和内存凭据队列，覆盖账号列表、登录归档、切换、删除、平台限制和错误状态，不读写真实账号。本次另在 DSH 0.2.2-rc.1 桌面运行中重启，确认插件页显示 v0.1.4、Codex/Grok 账号列表、登录按钮和删除入口；未执行真实新增账号授权或远端吊销。
+自动测试使用合成数据和内存凭据队列，覆盖账号列表、登录归档、切换、删除、模型可见性门禁、平台限制和错误状态，不读写真实账号。本次在 DSH 0.2.2-rc.1 桌面运行中重启，确认插件页显示 v0.1.5，并验证删除账号后 Codex/Grok 模型组从会话模型选择器消失；未执行真实新增账号授权或远端吊销。
 
 ## 许可
 

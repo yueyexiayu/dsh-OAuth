@@ -1,6 +1,6 @@
 {
   "name": "OAuth",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "DSH desktop plugin: manage multiple Grok/xAI and ChatGPT Codex accounts with official OAuth.",
   "type": "module",
