@@ -19,6 +19,7 @@ function harness(sessionId = "session-a") {
   let cursor = 0;
   let timerId = 0;
   let registration;
+  const registrations = {};
   let component;
   let tree;
   let unmounted = false;
@@ -62,8 +63,9 @@ function harness(sessionId = "session-a") {
   vm.runInNewContext(source, context);
   registration.apply({ slots: {
     inject(_name, callback) { callback(); },
-    register(_options, render) { component = render({ sessionId }).type; },
+    register(options, render) { registrations[options.name] = { options, render }; },
   } });
+  component = registrations["conversation.composer.dock"].render({ sessionId }).type;
   function render() {
     cursor = 0;
     tree = component({ sessionId, useProjection: projection === undefined ? undefined : useProjection });

@@ -1,8 +1,8 @@
 {
   "name": "OAuth",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
-  "description": "DSH desktop plugin: log in to Grok/xAI and ChatGPT Codex with official OAuth.",
+  "description": "DSH desktop plugin: manage multiple Grok/xAI and ChatGPT Codex accounts with official OAuth.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -17,7 +17,7 @@
     },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-plugin-manager"]
     }
   }
 }

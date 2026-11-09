@@ -5,6 +5,7 @@ import {
   displayNameFromIdentity,
   displayNameFromJwt,
   grantFromRecord,
+  identityFromIdentity,
   looksLikeOpaqueId,
   pickDisplayName,
   platformOf,
@@ -27,6 +28,12 @@ test("displayNameFromIdentity finds nested emails", () => {
   assert.equal(displayNameFromIdentity({ data: { profile: { mail: "user@example.com" } } }), "user@example.com");
   assert.equal(displayNameFromIdentity({ name: "Example" }), "Example");
   assert.equal(displayNameFromIdentity({ userId: "11111111-2222-4333-8444-555555555555" }), null);
+});
+
+test("identityFromIdentity finds a stable nested id without using it as a label", () => {
+  const body = { id: "request-id-not-an-account", user: { id: 42, username: "visible-name" } };
+  assert.equal(identityFromIdentity(body), "42");
+  assert.equal(displayNameFromIdentity(body), "visible-name");
 });
 
 test("publicAccount falls back to a jwt email for xai-style tokens", () => {
