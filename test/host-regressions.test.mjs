@@ -91,3 +91,41 @@ test('remote revocation failure still deletes local credential and leaves routes
   const r = await h.call('logout'); assert.equal(r.status, 502); assert.match(r.body.error, /本地凭据已删除/); noSecrets(r.body); assert.equal(h.credentials.records.has(KEY), false);
   assert.equal(form.get('token'), OLD.payload.refresh); assert.equal(form.get('token_type_hint'), 'refresh_token'); assert.equal(form.has('grant_type'), false);
 });
+test('logout deletes the archived copy of the same refresh token', async t => {
+  const archived = { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-old-access', refresh: 'SYNTHETIC-old-refresh', expires: 1, accountKey: 'synthetic', label: 'fixture' } };
+  const archivedKey = 'oauth-accounts/grok-0123456789abcdef01234567';
+  const base = store(OLD);
+  const records = new Map(base.records);
+  records.set(archivedKey, archived);
+  const operations = base.operations;
+  const credentials = {
+    records, operations,
+    async readRecord(key) { return records.get(key); },
+    async listRecords() { return [...records.keys()].map((key) => ({ key, kind: 'grant' })); },
+    modifyRecord(key, fn) { operations.push(['modify', key]); return Promise.resolve().then(async () => { const next = await fn(records.get(key)); records.set(key, next); return next; }); },
+    deleteRecord(key) { operations.push(['delete', key]); records.delete(key); return Promise.resolve(); },
+  };
+  const h = host(t, { credentials, fetch: normalFetch });
+  const r = await h.call('logout');
+  assert.equal(r.status, 200);
+  assert.equal(records.has(KEY), false);
+  assert.equal(records.has(archivedKey), false, 'the archived refresh token must not survive logout');
+});
+
+test('logout leaves an archive holding a different credential alone', async t => {
+  const otherKey = 'oauth-accounts/grok-ffffffffffffffffffffffff';
+  const base = store(OLD);
+  const records = new Map(base.records);
+  records.set(otherKey, { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-other-access', refresh: 'SYNTHETIC-other-refresh', expires: 1 } });
+  const credentials = {
+    records,
+    async readRecord(key) { return records.get(key); },
+    async listRecords() { return [...records.keys()].map((key) => ({ key, kind: 'grant' })); },
+    modifyRecord(key, fn) { return Promise.resolve().then(async () => { const next = await fn(records.get(key)); records.set(key, next); return next; }); },
+    deleteRecord(key) { records.delete(key); return Promise.resolve(); },
+  };
+  const h = host(t, { credentials, fetch: normalFetch });
+  const r = await h.call('logout');
+  assert.equal(r.status, 200);
+  assert.equal(records.has(otherKey), true, 'an unrelated archived account must not be deleted');
+});
